@@ -1,0 +1,446 @@
+## Flox Environment Manifest -----------------------------------------
+##
+##   _Everything_ you need to know about the _manifest_ is here:
+##
+##   https://flox.dev/docs/reference/command-reference/manifest.toml/
+##
+## -------------------------------------------------------------------
+# Flox manifest version managed by Flox CLI
+version = 1
+
+
+## Install Packages --------------------------------------------------
+##  $ flox install gum  <- puts a package in [install] section below
+##  $ flox search gum   <- search for a package
+##  $ flox show gum     <- show all versions of a package
+## -------------------------------------------------------------------
+[install]
+python313.pkg-path = "python313"
+uv.pkg-path = "uv"
+postgresql_16.pkg-path = "postgresql_16"
+postgis.pkg-path = "postgis"
+nginx.pkg-path = "nginx"
+osmium-tool.pkg-path = "osmium-tool"
+wget.pkg-path = "wget"
+curl.pkg-path = "curl"
+git.pkg-path = "git"
+tegola.pkg-path = "tegola"
+prometheus.pkg-path = "prometheus"
+grafana.pkg-path = "grafana"
+
+
+## Environment Variables ---------------------------------------------
+##  ... available for use in the activated environment
+##      as well as [hook], [profile] scripts and [services] below.
+## -------------------------------------------------------------------
+[vars]
+UV_PROJECT_ENVIRONMENT = "$FLOX_ENV_CACHE/venv"
+VIRTUAL_ENV = "$FLOX_ENV_CACHE/venv"
+PGDATA = "$FLOX_ENV_CACHE/pgdata"
+PGHOST = "localhost"
+PGPORT = "5432"
+PGUSER = "postgres"
+PGDATABASE = "sf_businesses"
+API_PORT = "2800"
+NGINX_PORT = "2801"
+TEGOLA_PORT = "2802"
+PROMETHEUS_PORT = "2803"
+GRAFANA_PORT = "2804"
+GRAFANA_DATA_DIR = "$FLOX_ENV_CACHE/grafana"
+PROMETHEUS_DATA_DIR = "$FLOX_ENV_CACHE/prometheus"
+TEGOLA_CONFIG_DIR = "$FLOX_ENV_CACHE/tegola"
+NGINX_CONFIG_DIR = "$FLOX_ENV_CACHE/nginx"
+
+
+## Activation Hook ---------------------------------------------------
+##  ... run by _bash_ shell when you run 'flox activate'.
+## -------------------------------------------------------------------
+[hook]
+on-activate = '''
+  # Create and sync the virtual environment using uv
+  if [ ! -d "$FLOX_ENV_CACHE/venv" ]; then
+    echo "Creating virtual environment with uv..."
+    uv venv "$FLOX_ENV_CACHE/venv" --python python3.13
+  fi
+
+  # Sync dependencies from pyproject.toml
+  echo "Syncing dependencies with uv..."
+  uv sync
+
+  # Initialize PostgreSQL if not exists
+  if [ ! -d "$PGDATA" ]; then
+    echo "Initializing PostgreSQL database..."
+    initdb -D "$PGDATA" --auth-local=trust --auth-host=md5
+    echo "port = $PGPORT" >> "$PGDATA/postgresql.conf"
+    echo "host all all 127.0.0.1/32 trust" >> "$PGDATA/pg_hba.conf"
+    echo "host all all ::1/128 trust" >> "$PGDATA/pg_hba.conf"
+  fi
+
+  # Create service configuration directories
+  mkdir -p "$GRAFANA_DATA_DIR" "$PROMETHEUS_DATA_DIR" "$TEGOLA_CONFIG_DIR" "$NGINX_CONFIG_DIR"
+
+  # Initialize Grafana data directory
+  if [ ! -f "$GRAFANA_DATA_DIR/grafana.db" ]; then
+    echo "Initializing Grafana data directory..."
+    chmod 755 "$GRAFANA_DATA_DIR"
+  fi
+
+  # Create Prometheus configuration if not exists
+  if [ ! -f "$PROMETHEUS_DATA_DIR/prometheus.yml" ]; then
+    echo "Creating Prometheus configuration..."
+    cat > "$PROMETHEUS_DATA_DIR/prometheus.yml" << EOF
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'sf-businesses-api'
+    static_configs:
+      - targets: ['localhost:$API_PORT']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  - job_name: 'tegola'
+    static_configs:
+      - targets: ['localhost:$TEGOLA_PORT']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:$PROMETHEUS_PORT']
+EOF
+  fi
+
+  # Create nginx configuration if not exists
+  if [ ! -f "$NGINX_CONFIG_DIR/nginx.conf" ]; then
+    echo "Creating nginx configuration..."
+    cat > "$NGINX_CONFIG_DIR/nginx.conf" << EOF
+worker_processes auto;
+pid $NGINX_CONFIG_DIR/nginx.pid;
+error_log $NGINX_CONFIG_DIR/error.log;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    access_log $NGINX_CONFIG_DIR/access.log;
+
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml;
+
+    upstream api_backend {
+        server localhost:$API_PORT;
+    }
+
+    upstream tegola_backend {
+        server localhost:$TEGOLA_PORT;
+    }
+
+    server {
+        listen $NGINX_PORT;
+        server_name localhost;
+
+        # Serve static files
+        location /static/ {
+            alias $PWD/output/;
+            expires 1h;
+            add_header Cache-Control "public, immutable";
+        }
+
+        # Proxy API requests
+        location /api/ {
+            proxy_pass http://api_backend/;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
+        }
+
+        # Proxy tile requests to Tegola
+        location /tiles/ {
+            proxy_pass http://tegola_backend/;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            add_header Access-Control-Allow-Origin "*";
+        }
+
+        # Main application
+        location / {
+            proxy_pass http://api_backend;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
+        }
+    }
+}
+EOF
+  fi
+
+  # Create Tegola configuration if not exists
+  if [ ! -f "$TEGOLA_CONFIG_DIR/tegola.toml" ]; then
+    echo "Creating Tegola configuration..."
+    cat > "$TEGOLA_CONFIG_DIR/tegola.toml" << EOF
+[webserver]
+port = ":$TEGOLA_PORT"
+
+[[providers]]
+name = "sf_businesses"
+type = "postgis"
+host = "$PGHOST"
+port = $PGPORT
+database = "$PGDATABASE"
+user = "$PGUSER"
+password = ""
+srid = 4326
+max_connections = 50
+
+  [[providers.layers]]
+  name = "businesses"
+  geometry_fieldname = "geom"
+  id_fieldname = "id"
+  sql = "SELECT id, business_name, naics_code, business_type, ST_Transform(geom, 3857) AS geom FROM businesses WHERE geom IS NOT NULL AND !BBOX!"
+
+  [[providers.layers]]
+  name = "buildings"
+  geometry_fieldname = "geom"
+  id_fieldname = "id"
+  sql = "SELECT id, building_type, height, ST_Transform(geom, 3857) AS geom FROM buildings WHERE geom IS NOT NULL AND !BBOX!"
+
+[[maps]]
+name = "sf_business_map"
+attribution = "SF Business Data"
+bounds = [-122.5150, 37.7050, -122.3550, 37.8150]
+center = [-122.4350, 37.7750, 12]
+
+  [[maps.layers]]
+  provider_layer = "sf_businesses.businesses"
+  min_zoom = 10
+  max_zoom = 22
+
+  [[maps.layers]]
+  provider_layer = "sf_businesses.buildings"
+  min_zoom = 12
+  max_zoom = 22
+EOF
+  fi
+
+  # Create Grafana configuration if not exists
+  if [ ! -f "$GRAFANA_DATA_DIR/grafana.ini" ]; then
+    echo "Creating Grafana configuration..."
+    cat > "$GRAFANA_DATA_DIR/grafana.ini" << EOF
+[server]
+http_port = $GRAFANA_PORT
+domain = localhost
+
+[database]
+type = sqlite3
+path = $GRAFANA_DATA_DIR/grafana.db
+
+[security]
+admin_user = admin
+admin_password = admin
+
+[analytics]
+reporting_enabled = false
+check_for_updates = false
+EOF
+  fi
+
+  echo "Flox environment ready! Services will be available on:"
+  echo "  API Server: http://localhost:$API_PORT"
+  echo "  Nginx: http://localhost:$NGINX_PORT"
+  echo "  Tegola: http://localhost:$TEGOLA_PORT"
+  echo "  Prometheus: http://localhost:$PROMETHEUS_PORT"
+  echo "  Grafana: http://localhost:$GRAFANA_PORT"
+'''
+
+
+## Profile script ----------------------------------------------------
+## ... sourced by _your shell_ when you run 'flox activate'.
+## -------------------------------------------------------------------
+[profile]
+common = '''
+  # Activate the virtual environment in the current shell
+  export PATH="$FLOX_ENV_CACHE/venv/bin:$PATH"
+
+  # Show Python and uv versions
+  echo "Python: $(python --version)"
+  echo "uv: $(uv --version)"
+  echo "Virtual environment: $VIRTUAL_ENV"
+'''
+## Shell-specific customizations such as setting aliases go here:
+# bash = ...
+# zsh  = ...
+# fish = ...
+
+
+## Services ---------------------------------------------------------
+##  $ flox services start             <- Starts all services
+##  $ flox services status            <- Status of running services
+##  $ flox activate --start-services  <- Activates & starts all
+## ------------------------------------------------------------------
+[services]
+postgres.command = "postgres -D $PGDATA"
+postgres.shutdown.command = "pg_ctl stop -D $PGDATA -m fast"
+postgres.is-daemon = true
+
+api.command = "uv run uvicorn main:app --host 0.0.0.0 --port $API_PORT --reload"
+api.shutdown.command = "pkill -f 'uvicorn main:app'"
+
+nginx.command = "nginx -c $NGINX_CONFIG_DIR/nginx.conf -g 'daemon off;'"
+nginx.shutdown.command = "nginx -s quit"
+nginx.is-daemon = false
+
+tegola.command = "tegola serve --config $TEGOLA_CONFIG_DIR/tegola.toml --port $TEGOLA_PORT"
+tegola.shutdown.command = "pkill -f tegola"
+
+prometheus.command = "prometheus --config.file=$PROMETHEUS_DATA_DIR/prometheus.yml --storage.tsdb.path=$PROMETHEUS_DATA_DIR --web.listen-address=:$PROMETHEUS_PORT"
+prometheus.shutdown.command = "pkill -f prometheus"
+prometheus.is-daemon = true
+
+grafana.command = "grafana server --homepath=/nix/store/*/share/grafana --config=$GRAFANA_DATA_DIR/grafana.ini"
+grafana.shutdown.command = "pkill -f grafana"
+grafana.is-daemon = true
+
+
+## Include ----------------------------------------------------------
+## ... environments to create a composed environment
+## ------------------------------------------------------------------
+[include]
+# environments = [
+#     { dir = "../common" }
+# ]
+
+
+## Build and publish your own packages ------------------------------
+##  $ flox build
+##  $ flox publish
+## ------------------------------------------------------------------
+[build]
+[build.sf-businesses]
+description = "SF Business Data Pipeline with Flox"
+version = "0.1.0"
+command = """
+  echo "Building SF Business Application..."
+
+  # Create output directories
+  mkdir -p $out/app
+  mkdir -p $out/config
+  mkdir -p $out/bin
+
+  # Copy application files
+  cp -r . $out/app/
+
+  # Create startup script
+  cat > $out/bin/start-services << 'EOF'
+#!/bin/bash
+set -e
+
+echo "Starting SF Business Services..."
+
+# Initialize data directories
+mkdir -p /data/{postgres,grafana,prometheus,tegola,nginx}
+
+# Start PostgreSQL
+if [ ! -d "/data/postgres/data" ]; then
+  echo "Initializing PostgreSQL..."
+  initdb -D /data/postgres/data --auth-local=trust --auth-host=md5
+  echo "port = 5432" >> /data/postgres/data/postgresql.conf
+fi
+
+# Start services in background
+postgres -D /data/postgres/data &
+POSTGRES_PID=$!
+
+# Wait for PostgreSQL to start
+sleep 5
+pg_isready -h localhost -p 5432
+
+# Start application services
+cd /app
+export PGDATA=/data/postgres/data
+export GRAFANA_DATA_DIR=/data/grafana
+export PROMETHEUS_DATA_DIR=/data/prometheus
+export TEGOLA_CONFIG_DIR=/data/tegola
+export NGINX_CONFIG_DIR=/data/nginx
+
+# Start API server
+uv run uvicorn main:app --host 0.0.0.0 --port 2800 &
+API_PID=$!
+
+# Start monitoring stack
+prometheus --config.file=/data/prometheus/prometheus.yml \
+           --storage.tsdb.path=/data/prometheus \
+           --web.listen-address=:2803 &
+PROMETHEUS_PID=$!
+
+grafana server --homepath=/nix/store/*/share/grafana \
+               --config=/data/grafana/grafana.ini &
+GRAFANA_PID=$!
+
+# Start Tegola
+tegola serve --config /data/tegola/tegola.toml --port 2802 &
+TEGOLA_PID=$!
+
+# Start nginx
+nginx -c /data/nginx/nginx.conf -g 'daemon off;' &
+NGINX_PID=$!
+
+echo "All services started!"
+echo "API: http://localhost:2800"
+echo "Nginx: http://localhost:2801"
+echo "Tegola: http://localhost:2802"
+echo "Prometheus: http://localhost:2803"
+echo "Grafana: http://localhost:2804"
+
+# Wait for any service to exit
+wait $API_PID $PROMETHEUS_PID $GRAFANA_PID $TEGOLA_PID $NGINX_PID $POSTGRES_PID
+EOF
+
+  chmod +x $out/bin/start-services
+
+  # Create health check script
+  cat > $out/bin/health-check << 'EOF'
+#!/bin/bash
+# Simple health check for containerized deployment
+
+# Check API server
+curl -f http://localhost:2800/health || exit 1
+
+# Check database
+pg_isready -h localhost -p 5432 || exit 1
+
+echo "Health check passed"
+EOF
+
+  chmod +x $out/bin/health-check
+
+  echo "SF Business application built successfully!"
+"""
+
+
+## Other Environment Options -----------------------------------------
+[options]
+# Systems that environment is compatible with
+# systems = [
+#   "aarch64-darwin",
+#   "aarch64-linux",
+#   "x86_64-darwin",
+#   "x86_64-linux",
+# ]
+# Uncomment to disable CUDA detection.
+# cuda-detection = false
