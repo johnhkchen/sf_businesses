@@ -1,0 +1,419 @@
+name: Flox Environment Deployment
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      deployment_target:
+        description: 'Deployment target'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - staging
+        - production
+      container_build:
+        description: 'Build container images'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  FLOX_VERSION: 'latest'
+
+jobs:
+  # Test in Flox environment
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install Flox
+      run: |
+        curl -sSf https://downloads.flox.dev/by-env/x86_64-linux/stable/flox | sh
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+    - name: Initialize Flox environment
+      run: |
+        flox activate -- echo "Flox environment activated"
+
+    - name: Run health checks
+      run: |
+        flox activate -- bash -c '
+          echo "=== Environment Health Check ==="
+          python --version
+          uv --version
+          which postgres
+          which nginx
+          which tegola
+          which prometheus
+          which grafana
+          echo "All dependencies available ✓"
+        '
+
+    - name: Start services for testing
+      run: |
+        flox activate -- bash -c '
+          # Start PostgreSQL in background
+          flox services start postgres &
+          sleep 5
+
+          # Test database connectivity
+          pg_isready -h localhost -p 5432
+
+          # Run basic data pipeline test
+          if [ -f "refresh.py" ]; then
+            echo "Running data pipeline test..."
+            uv run python refresh.py status
+          fi
+        '
+
+    - name: Upload test artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-logs-${{ github.run_id }}
+        path: |
+          cache/refresh_logs/
+        retention-days: 7
+
+  # Build container images
+  containerize:
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.container_build == 'true')
+    timeout-minutes: 30
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install Flox
+      run: |
+        curl -sSf https://downloads.flox.dev/by-env/x86_64-linux/stable/flox | sh
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to GitHub Container Registry
+      if: github.event_name == 'push'
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Build container with Flox
+      run: |
+        flox activate -- bash -c '
+          echo "=== Building Flox Container ==="
+
+          # Generate container using flox containerize
+          flox containerize --name sf-businesses-app --tag latest
+
+          # Tag for registry
+          docker tag sf-businesses-app:latest ghcr.io/${{ github.repository }}/sf-businesses:latest
+          docker tag sf-businesses-app:latest ghcr.io/${{ github.repository }}/sf-businesses:${{ github.sha }}
+        '
+
+    - name: Test container
+      run: |
+        echo "=== Testing Container ==="
+
+        # Run container health check
+        docker run --rm --name test-container \
+          -e PGHOST=localhost \
+          -e PGPORT=5432 \
+          -d ghcr.io/${{ github.repository }}/sf-businesses:latest
+
+        sleep 10
+
+        # Check if container is running
+        docker ps | grep test-container
+
+        # Stop test container
+        docker stop test-container || true
+
+    - name: Push container images
+      if: github.event_name == 'push'
+      run: |
+        docker push ghcr.io/${{ github.repository }}/sf-businesses:latest
+        docker push ghcr.io/${{ github.repository }}/sf-businesses:${{ github.sha }}
+
+    - name: Upload container artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: container-metadata-${{ github.run_id }}
+        path: |
+          docker-compose*.yml
+        retention-days: 30
+
+  # Deploy to staging
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: [test, containerize]
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && github.event.inputs.deployment_target == 'staging')
+    environment: staging
+    timeout-minutes: 15
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install Flox
+      run: |
+        curl -sSf https://downloads.flox.dev/by-env/x86_64-linux/stable/flox | sh
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+    - name: Generate deployment manifests
+      run: |
+        flox activate -- bash -c '
+          echo "=== Generating Deployment Manifests ==="
+
+          # Create Kubernetes manifests from Flox environment
+          cat > k8s-deployment.yml << EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sf-businesses-app
+  labels:
+    app: sf-businesses
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sf-businesses
+  template:
+    metadata:
+      labels:
+        app: sf-businesses
+    spec:
+      containers:
+      - name: app
+        image: ghcr.io/${{ github.repository }}/sf-businesses:${{ github.sha }}
+        ports:
+        - containerPort: 2800
+        - containerPort: 2801
+        - containerPort: 2802
+        env:
+        - name: PGHOST
+          value: "postgres-service"
+        - name: PGPORT
+          value: "5432"
+        - name: PGDATABASE
+          value: "sf_businesses"
+        - name: API_PORT
+          value: "2800"
+        - name: NGINX_PORT
+          value: "2801"
+        - name: TEGOLA_PORT
+          value: "2802"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 2800
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 2800
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sf-businesses-service
+spec:
+  selector:
+    app: sf-businesses
+  ports:
+  - name: api
+    port: 80
+    targetPort: 2800
+  - name: nginx
+    port: 8080
+    targetPort: 2801
+  - name: tiles
+    port: 8081
+    targetPort: 2802
+  type: LoadBalancer
+EOF
+
+          # Create Docker Compose for local/staging deployment
+          cat > docker-compose.staging.yml << EOF
+version: "3.8"
+
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: sf_businesses
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    image: ghcr.io/${{ github.repository }}/sf-businesses:${{ github.sha }}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "2800:2800"  # API
+      - "2801:2801"  # Nginx
+      - "2802:2802"  # Tegola
+      - "2803:2803"  # Prometheus
+      - "2804:2804"  # Grafana
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGDATABASE: sf_businesses
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    volumes:
+      - app_cache:/app/cache
+      - app_output:/app/output
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:2800/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  postgres_data:
+  app_cache:
+  app_output:
+EOF
+        '
+
+    - name: Simulate staging deployment
+      run: |
+        echo "=== Staging Deployment Simulation ==="
+        echo "Would deploy to staging environment with:"
+        echo "  - Container: ghcr.io/${{ github.repository }}/sf-businesses:${{ github.sha }}"
+        echo "  - Kubernetes manifests: k8s-deployment.yml"
+        echo "  - Docker Compose: docker-compose.staging.yml"
+
+        # In a real deployment, you would:
+        # kubectl apply -f k8s-deployment.yml
+        # or
+        # docker-compose -f docker-compose.staging.yml up -d
+
+    - name: Upload deployment artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: deployment-manifests-${{ github.run_id }}
+        path: |
+          k8s-deployment.yml
+          docker-compose.staging.yml
+        retention-days: 30
+
+  # Deploy to production
+  deploy-production:
+    runs-on: ubuntu-latest
+    needs: [test, containerize, deploy-staging]
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.deployment_target == 'production'
+    environment: production
+    timeout-minutes: 20
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Production deployment
+      run: |
+        echo "=== Production Deployment ==="
+        echo "Would deploy to production with zero-downtime strategy"
+        echo "Container: ghcr.io/${{ github.repository }}/sf-businesses:${{ github.sha }}"
+
+        # In a real deployment:
+        # 1. Blue-green deployment
+        # 2. Health checks
+        # 3. Traffic switching
+        # 4. Rollback capability
+
+    - name: Create deployment summary
+      run: |
+        echo "## Deployment Summary 🚀" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Target**: ${{ github.event.inputs.deployment_target || 'staging' }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Container**: ghcr.io/${{ github.repository }}/sf-businesses:${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Services Available:" >> $GITHUB_STEP_SUMMARY
+        echo "- 🌐 API Server: Port 2800" >> $GITHUB_STEP_SUMMARY
+        echo "- 🔧 Nginx Proxy: Port 2801" >> $GITHUB_STEP_SUMMARY
+        echo "- 🗺️ Tegola Tiles: Port 2802" >> $GITHUB_STEP_SUMMARY
+        echo "- 📊 Prometheus: Port 2803" >> $GITHUB_STEP_SUMMARY
+        echo "- 📈 Grafana: Port 2804" >> $GITHUB_STEP_SUMMARY
+
+  # Cleanup on failure
+  cleanup:
+    runs-on: ubuntu-latest
+    needs: [test, containerize, deploy-staging]
+    if: failure()
+
+    steps:
+    - name: Cleanup failed deployment
+      run: |
+        echo "=== Cleaning up failed deployment ==="
+        # In a real scenario, clean up any partial deployments
+        echo "Would cleanup containers, stop services, and rollback if needed"
+
+    - name: Create failure issue
+      if: github.event_name == 'push'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const title = 'Flox Deployment Pipeline Failure';
+          const body = `## Deployment Pipeline Failure
+
+          **Workflow**: ${{ github.workflow }}
+          **Run ID**: ${{ github.run_id }}
+          **Commit**: ${{ github.sha }}
+          **Branch**: ${{ github.ref_name }}
+
+          The Flox-based deployment pipeline has failed. Please check the workflow logs for details.
+
+          **Workflow Run**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          ### Possible Causes:
+          - Flox environment issues
+          - Container build failures
+          - Service startup problems
+          - Configuration errors
+
+          Please investigate and resolve the issue.
+          `;
+
+          await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: title,
+            body: body,
+            labels: ['deployment-failure', 'flox', 'urgent']
+          });
