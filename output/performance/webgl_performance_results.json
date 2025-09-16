@@ -1,0 +1,158 @@
+{
+  "bulk_endpoint_tests": [
+    {
+      "name": "Small Dataset",
+      "bbox": "-122.42,37.77,-122.40,37.79",
+      "max_points": 5000,
+      "target_ms": 200,
+      "avg_time_ms": 32.59706497192383,
+      "min_time_ms": 30.69138526916504,
+      "max_time_ms": 33.94651412963867,
+      "target_met": true,
+      "points_loaded": 5000
+    },
+    {
+      "name": "Medium Dataset",
+      "bbox": "-122.43,37.74,-122.41,37.76",
+      "max_points": 25000,
+      "target_ms": 500,
+      "avg_time_ms": 68.44027837117513,
+      "min_time_ms": 65.6735897064209,
+      "max_time_ms": 72.9227066040039,
+      "target_met": true,
+      "points_loaded": 15157
+    },
+    {
+      "name": "Large Dataset",
+      "bbox": "-122.5,37.7,-122.3,37.8",
+      "max_points": 100000,
+      "target_ms": 1000,
+      "avg_time_ms": 432.38210678100586,
+      "min_time_ms": 410.20917892456055,
+      "max_time_ms": 455.01160621643066,
+      "target_met": true,
+      "points_loaded": 100000
+    },
+    {
+      "name": "Extra Large",
+      "bbox": null,
+      "max_points": 150000,
+      "target_ms": 1500,
+      "avg_time_ms": 614.3028736114502,
+      "min_time_ms": 582.4048519134521,
+      "max_time_ms": 631.7291259765625,
+      "target_met": true,
+      "points_loaded": 150000
+    }
+  ],
+  "concurrent_load_tests": [
+    {
+      "concurrency": 1,
+      "success_rate": 1.0,
+      "avg_response_ms": 169.39854621887207,
+      "total_time_ms": 203.88197898864746,
+      "total_points": 50000,
+      "throughput_points_per_sec": 245239.9189375344
+    },
+    {
+      "concurrency": 5,
+      "success_rate": 1.0,
+      "avg_response_ms": 1033.510684967041,
+      "total_time_ms": 1155.1027297973633,
+      "total_points": 250000,
+      "throughput_points_per_sec": 216430.96631228362
+    },
+    {
+      "concurrency": 10,
+      "success_rate": 1.0,
+      "avg_response_ms": 2070.833373069763,
+      "total_time_ms": 2298.757791519165,
+      "total_points": 500000,
+      "throughput_points_per_sec": 217508.7788042116
+    },
+    {
+      "concurrency": 20,
+      "success_rate": 1.0,
+      "avg_response_ms": 4166.285669803619,
+      "total_time_ms": 4611.083507537842,
+      "total_points": 1000000,
+      "throughput_points_per_sec": 216868.76812473196
+    }
+  ],
+  "memory_efficiency_tests": [
+    {
+      "target_points": 10000,
+      "actual_points": 10000,
+      "load_time_ms": 38.68365287780762,
+      "json_size_mb": 0.3963508605957031,
+      "estimated_memory_mb": 0.5340576171875,
+      "efficiency_points_per_ms": 258.5071278451288
+    },
+    {
+      "target_points": 50000,
+      "actual_points": 50000,
+      "load_time_ms": 157.70459175109863,
+      "json_size_mb": 1.9811897277832031,
+      "estimated_memory_mb": 2.6702880859375,
+      "efficiency_points_per_ms": 317.04847300143166
+    },
+    {
+      "target_points": 100000,
+      "actual_points": 100000,
+      "load_time_ms": 310.896635055542,
+      "json_size_mb": 3.961465835571289,
+      "estimated_memory_mb": 5.340576171875,
+      "efficiency_points_per_ms": 321.6503130763538
+    },
+    {
+      "target_points": 150000,
+      "actual_points": 150000,
+      "load_time_ms": 524.3861675262451,
+      "json_size_mb": 5.941648483276367,
+      "estimated_memory_mb": 8.0108642578125,
+      "efficiency_points_per_ms": 286.0487352433693
+    }
+  ],
+  "zoom_level_tests": [
+    {
+      "zoom_level": 8,
+      "points": 100000,
+      "server_time_ms": 187.45,
+      "total_time_ms": 321.8865394592285
+    },
+    {
+      "zoom_level": 10,
+      "points": 100000,
+      "server_time_ms": 216.99,
+      "total_time_ms": 350.80981254577637
+    },
+    {
+      "zoom_level": 12,
+      "points": 100000,
+      "server_time_ms": 187.36,
+      "total_time_ms": 315.52982330322266
+    },
+    {
+      "zoom_level": 14,
+      "points": 100000,
+      "server_time_ms": 182.31,
+      "total_time_ms": 310.74023246765137
+    },
+    {
+      "zoom_level": 16,
+      "points": 100000,
+      "server_time_ms": 214.43,
+      "total_time_ms": 341.45593643188477
+    }
+  ],
+  "summary": {
+    "timestamp": "2025-09-16 15:31:15",
+    "overall_assessment": "EXCELLENT",
+    "criteria_results": {
+      "100k+ points load in <1s": true,
+      "Stable under concurrent load": true,
+      "Memory usage <100MB for 100k points": true
+    },
+    "criteria_passed": "3/3"
+  }
+}
