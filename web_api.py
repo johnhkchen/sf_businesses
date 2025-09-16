@@ -12,6 +12,7 @@ from shapely.geometry import Point, box
 import geojson
 from typing import Optional, List, Dict, Any
 import math
+from progressive_loader import ProgressiveDataLoader
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ class BuildingVisualizationAPI:
         self.output_dir = Path("output")
         self.buildings_df = None
         self.businesses_df = None
+        self.progressive_loader = ProgressiveDataLoader(self.output_dir)
         self.load_data()
 
     def load_data(self):
@@ -50,7 +52,7 @@ class BuildingVisualizationAPI:
 
     def get_building_business_aggregation(self, bbox: Optional[tuple] = None, zoom_level: int = 12) -> Dict[str, Any]:
         """
-        Aggregate business data by building with spatial filtering.
+        Aggregate business data by building with spatial filtering using progressive loading.
 
         Args:
             bbox: Bounding box (min_lon, min_lat, max_lon, max_lat)
@@ -59,57 +61,65 @@ class BuildingVisualizationAPI:
         Returns:
             Dict with aggregated building-business data
         """
-        if zoom_level < 14:
-            # Use pre-computed grid for lower zoom levels
-            if self.business_grid is not None:
-                grid_data = self.business_grid
+        try:
+            # Use the new progressive loader
+            result = self.progressive_loader.get_progressive_data(zoom_level, bbox)
+            return result
+        except Exception as e:
+            logger.error(f"Progressive loader failed, falling back to legacy method: {e}")
 
-                if bbox:
-                    min_lon, min_lat, max_lon, max_lat = bbox
-                    grid_data = grid_data.filter(
-                        (pl.col("center_lon") >= min_lon) &
-                        (pl.col("center_lon") <= max_lon) &
-                        (pl.col("center_lat") >= min_lat) &
-                        (pl.col("center_lat") <= max_lat)
-                    )
+            # Fallback to original logic
+            if zoom_level < 14:
+                # Use pre-computed grid for lower zoom levels
+                if self.business_grid is not None:
+                    grid_data = self.business_grid
 
-                return {
-                    "type": "grid",
-                    "zoom_level": zoom_level,
-                    "features": grid_data.to_dicts(),
-                    "total_features": len(grid_data)
-                }
+                    if bbox:
+                        min_lon, min_lat, max_lon, max_lat = bbox
+                        grid_data = grid_data.filter(
+                            (pl.col("center_lon") >= min_lon) &
+                            (pl.col("center_lon") <= max_lon) &
+                            (pl.col("center_lat") >= min_lat) &
+                            (pl.col("center_lat") <= max_lat)
+                        )
+
+                    return {
+                        "type": "grid",
+                        "zoom_level": zoom_level,
+                        "features": grid_data.to_dicts(),
+                        "total_features": len(grid_data)
+                    }
+                else:
+                    # Fallback to on-demand computation
+                    return self._compute_grid_on_demand(bbox, zoom_level)
             else:
-                # Fallback to on-demand computation
-                return self._compute_grid_on_demand(bbox, zoom_level)
-        else:
-            # Use pre-computed building data for high zoom levels
-            if self.buildings_enriched is not None:
-                buildings_data = self.buildings_enriched
+                # Use pre-computed building data for high zoom levels
+                if self.buildings_enriched is not None:
+                    buildings_data = self.buildings_enriched
 
-                if bbox:
-                    min_lon, min_lat, max_lon, max_lat = bbox
-                    buildings_data = buildings_data.filter(
-                        (pl.col("center_lon") >= min_lon) &
-                        (pl.col("center_lon") <= max_lon) &
-                        (pl.col("center_lat") >= min_lat) &
-                        (pl.col("center_lat") <= max_lat)
-                    ).head(1000)  # Limit for performance
+                    if bbox:
+                        min_lon, min_lat, max_lon, max_lat = bbox
+                        buildings_data = buildings_data.filter(
+                            (pl.col("center_lon") >= min_lon) &
+                            (pl.col("center_lon") <= max_lon) &
+                            (pl.col("center_lat") >= min_lat) &
+                            (pl.col("center_lat") <= max_lat)
+                        ).head(1000)  # Limit for performance
 
-                return {
-                    "type": "buildings",
-                    "zoom_level": zoom_level,
-                    "buildings": buildings_data.to_dicts(),
-                    "total_features": len(buildings_data)
-                }
-            else:
-                # Fallback to on-demand computation
-                return {
-                    "type": "buildings",
-                    "zoom_level": zoom_level,
-                    "buildings": self._get_building_details(bbox),
-                    "total_features": len(self.buildings_df)
-                }
+                    return {
+                        "type": "buildings",
+                        "zoom_level": zoom_level,
+                        "buildings": buildings_data.to_dicts(),
+                        "total_features": len(buildings_data)
+                    }
+                else:
+                    # Fallback to on-demand computation
+                    return {
+                        "type": "buildings",
+                        "zoom_level": zoom_level,
+                        "buildings": self._get_building_details(bbox),
+                        "total_features": len(self.buildings_df)
+                    }
 
     def _compute_grid_on_demand(self, bbox: Optional[tuple] = None, zoom_level: int = 12) -> Dict[str, Any]:
         """Compute grid aggregation on demand if pre-computed data is not available."""
@@ -312,6 +322,38 @@ async def get_building_businesses(building_id: int):
         logger.error(f"Error getting businesses for building {building_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/precompute")
+async def precompute_data():
+    """Precompute all zoom level data for improved performance."""
+    try:
+        results = api_instance.progressive_loader.precompute_all_zoom_levels()
+        return JSONResponse(content={
+            "status": "success",
+            "message": "Precomputation completed",
+            "results": results
+        })
+    except Exception as e:
+        logger.error(f"Error in precomputation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/performance/metrics")
+async def get_performance_metrics():
+    """Get current performance metrics."""
+    try:
+        cache_dir = api_instance.progressive_loader.cache_dir
+        summary_file = cache_dir / "precomputation_summary.json"
+
+        if summary_file.exists():
+            with open(summary_file, 'r') as f:
+                metrics = json.load(f)
+        else:
+            metrics = {"message": "No precomputed data available"}
+
+        return JSONResponse(content=metrics)
+    except Exception as e:
+        logger.error(f"Error getting performance metrics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/map", response_class=HTMLResponse)
 async def get_map():
     """Serve the interactive map visualization."""
@@ -336,6 +378,30 @@ async def get_map():
                 font-family: Arial, sans-serif;
                 overflow: auto;
                 border-radius: 3px;
+            }
+            #loading-indicator {
+                position: absolute;
+                top: 10px;
+                left: 50%;
+                transform: translateX(-50%);
+                background: rgba(0, 0, 0, 0.8);
+                color: white;
+                padding: 10px 20px;
+                border-radius: 5px;
+                font-family: Arial, sans-serif;
+                display: none;
+                z-index: 1000;
+            }
+            #performance-info {
+                position: absolute;
+                top: 10px;
+                left: 10px;
+                background: rgba(255, 255, 255, 0.9);
+                padding: 10px;
+                border-radius: 5px;
+                font-family: Arial, sans-serif;
+                font-size: 12px;
+                z-index: 1000;
             }
             #legend {
                 padding: 10px;
@@ -364,6 +430,14 @@ async def get_map():
     </head>
     <body>
         <div id='map'></div>
+        <div id='loading-indicator'>Loading data...</div>
+        <div id='performance-info'>
+            <div>Zoom: <span id='current-zoom'>12</span></div>
+            <div>Data Type: <span id='data-type'>-</span></div>
+            <div>Load Time: <span id='load-time'>-</span>ms</div>
+            <div>Features: <span id='feature-count'>-</span></div>
+            <div>Cache: <span id='cache-status'>-</span></div>
+        </div>
         <div class='map-overlay' id='legend'>
             <h3>Building Business Density</h3>
             <div><span class='legend-key' style='background-color: #800026'></span>Very High (8-10)</div>
@@ -387,6 +461,10 @@ async def get_map():
             });
 
             let currentZoom = 12;
+            let dataCache = new Map(); // Client-side cache
+            let prefetchQueue = new Set(); // Prefetch queue
+            let isLoading = false;
+            let movementHistory = []; // Track user movement for smart prefetching
 
             function getColor(density) {
                 return density > 8 ? '#800026' :
@@ -397,24 +475,172 @@ async def get_map():
                                      '#FFEDA0';
             }
 
+            function showLoading() {
+                document.getElementById('loading-indicator').style.display = 'block';
+                isLoading = true;
+            }
+
+            function hideLoading() {
+                document.getElementById('loading-indicator').style.display = 'none';
+                isLoading = false;
+            }
+
+            function updatePerformanceInfo(data, loadTime, fromCache) {
+                document.getElementById('current-zoom').textContent = currentZoom;
+                document.getElementById('data-type').textContent = data.type || 'unknown';
+                document.getElementById('load-time').textContent = loadTime;
+                document.getElementById('feature-count').textContent = data.total_features || 0;
+                document.getElementById('cache-status').textContent = fromCache ? 'HIT' : 'MISS';
+            }
+
+            function getCacheKey(bbox, zoom) {
+                return `${Math.round(zoom)}_${bbox}`;
+            }
+
+            function addToMovementHistory(center, zoom) {
+                movementHistory.push({
+                    center: center,
+                    zoom: zoom,
+                    timestamp: Date.now()
+                });
+
+                // Keep only recent movements (last 10 seconds)
+                const cutoff = Date.now() - 10000;
+                movementHistory = movementHistory.filter(m => m.timestamp > cutoff);
+            }
+
+            function predictNextBounds() {
+                if (movementHistory.length < 2) return [];
+
+                const recent = movementHistory.slice(-3);
+                const predictions = [];
+
+                // Simple prediction: continue in the same direction
+                if (recent.length >= 2) {
+                    const last = recent[recent.length - 1];
+                    const prev = recent[recent.length - 2];
+
+                    const deltaLng = last.center.lng - prev.center.lng;
+                    const deltaLat = last.center.lat - prev.center.lat;
+
+                    // Predict next position
+                    const predictedCenter = {
+                        lng: last.center.lng + deltaLng,
+                        lat: last.center.lat + deltaLat
+                    };
+
+                    // Generate bounding box around predicted center
+                    const bounds = map.getBounds();
+                    const width = bounds.getEast() - bounds.getWest();
+                    const height = bounds.getNorth() - bounds.getSouth();
+
+                    predictions.push({
+                        bbox: `${predictedCenter.lng - width/2},${predictedCenter.lat - height/2},${predictedCenter.lng + width/2},${predictedCenter.lat + height/2}`,
+                        zoom: last.zoom
+                    });
+                }
+
+                return predictions;
+            }
+
+            function prefetchData() {
+                if (isLoading || prefetchQueue.size > 3) return; // Don't prefetch too much
+
+                const predictions = predictNextBounds();
+                predictions.forEach(pred => {
+                    const cacheKey = getCacheKey(pred.bbox, pred.zoom);
+                    if (!dataCache.has(cacheKey) && !prefetchQueue.has(cacheKey)) {
+                        prefetchQueue.add(cacheKey);
+
+                        // Prefetch in background
+                        fetch(`/buildings?bbox=${pred.bbox}&zoom=${pred.zoom}`)
+                            .then(response => response.json())
+                            .then(data => {
+                                dataCache.set(cacheKey, data);
+                                prefetchQueue.delete(cacheKey);
+                            })
+                            .catch(error => {
+                                prefetchQueue.delete(cacheKey);
+                                console.log('Prefetch failed:', error);
+                            });
+                    }
+                });
+            }
+
             function updateData() {
                 const bounds = map.getBounds();
                 const bbox = `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}`;
                 const zoom = Math.round(map.getZoom());
 
-                if (Math.abs(zoom - currentZoom) < 1) return; // Avoid excessive updates
+                // Add to movement history for smart prefetching
+                addToMovementHistory(map.getCenter(), zoom);
+
+                // Throttle updates for performance
+                if (Math.abs(zoom - currentZoom) < 1 && isLoading) return;
                 currentZoom = zoom;
+
+                // Check cache first
+                const cacheKey = getCacheKey(bbox, zoom);
+                const startTime = performance.now();
+
+                if (dataCache.has(cacheKey)) {
+                    const data = dataCache.get(cacheKey);
+                    const loadTime = Math.round(performance.now() - startTime);
+                    updatePerformanceInfo(data, loadTime, true);
+
+                    if (data.type === 'hexagonal') {
+                        updateHexagonalDisplay(data.features);
+                    } else if (data.type === 'statistical_clusters') {
+                        updateClusterDisplay(data.features);
+                    } else if (data.type === 'individual_buildings') {
+                        updateBuildingDisplay(data.features);
+                    } else if (data.type === 'grid') {
+                        updateGridDisplay(data.features);
+                    } else {
+                        updateBuildingDisplay(data.buildings || data.features || []);
+                    }
+
+                    // Start prefetching for predicted movements
+                    setTimeout(prefetchData, 100);
+                    return;
+                }
+
+                // Not in cache, fetch from server
+                showLoading();
 
                 fetch(`/buildings?bbox=${bbox}&zoom=${zoom}`)
                     .then(response => response.json())
                     .then(data => {
-                        if (data.type === 'grid') {
+                        const loadTime = Math.round(performance.now() - startTime);
+                        hideLoading();
+
+                        // Cache the response
+                        dataCache.set(cacheKey, data);
+
+                        // Update performance info
+                        updatePerformanceInfo(data, loadTime, false);
+
+                        // Display based on data type
+                        if (data.type === 'hexagonal') {
+                            updateHexagonalDisplay(data.features);
+                        } else if (data.type === 'statistical_clusters') {
+                            updateClusterDisplay(data.features);
+                        } else if (data.type === 'individual_buildings') {
+                            updateBuildingDisplay(data.features);
+                        } else if (data.type === 'grid') {
                             updateGridDisplay(data.features);
                         } else {
-                            updateBuildingDisplay(data.buildings);
+                            updateBuildingDisplay(data.buildings || data.features || []);
                         }
+
+                        // Start prefetching for predicted movements
+                        setTimeout(prefetchData, 500);
                     })
-                    .catch(error => console.error('Error:', error));
+                    .catch(error => {
+                        console.error('Error:', error);
+                        hideLoading();
+                        updatePerformanceInfo({type: 'error'}, Math.round(performance.now() - startTime), false);
+                    });
             }
 
             function updateGridDisplay(features) {
@@ -469,6 +695,131 @@ async def get_map():
                             100, '#800026'
                         ],
                         'circle-opacity': 0.7
+                    }
+                });
+            }
+
+            function updateHexagonalDisplay(features) {
+                // Remove existing layers
+                ['buildings', 'grid', 'clusters', 'hexagons'].forEach(layerId => {
+                    if (map.getLayer(layerId)) {
+                        map.removeLayer(layerId);
+                        map.removeSource(layerId);
+                    }
+                });
+
+                // Create GeoJSON for hexagons
+                const hexData = {
+                    type: 'FeatureCollection',
+                    features: features.map(f => ({
+                        type: 'Feature',
+                        geometry: {
+                            type: 'Point',
+                            coordinates: [f.center_lon, f.center_lat]
+                        },
+                        properties: {
+                            business_count: f.business_count,
+                            business_types: f.business_types,
+                            primary_naics: f.primary_naics,
+                            hex_size: f.hex_size
+                        }
+                    }))
+                };
+
+                map.addSource('hexagons', {
+                    type: 'geojson',
+                    data: hexData
+                });
+
+                map.addLayer({
+                    id: 'hexagons',
+                    type: 'circle',
+                    source: 'hexagons',
+                    paint: {
+                        'circle-radius': [
+                            'interpolate',
+                            ['linear'],
+                            ['get', 'business_count'],
+                            0, 8,
+                            20, 15,
+                            100, 25
+                        ],
+                        'circle-color': [
+                            'interpolate',
+                            ['linear'],
+                            ['get', 'business_count'],
+                            0, '#FFEDA0',
+                            5, '#FEB24C',
+                            15, '#FC4E2A',
+                            30, '#E31A1C',
+                            50, '#800026'
+                        ],
+                        'circle-opacity': 0.8,
+                        'circle-stroke-color': '#fff',
+                        'circle-stroke-width': 1
+                    }
+                });
+            }
+
+            function updateClusterDisplay(features) {
+                // Remove existing layers
+                ['buildings', 'grid', 'hexagons', 'clusters'].forEach(layerId => {
+                    if (map.getLayer(layerId)) {
+                        map.removeLayer(layerId);
+                        map.removeSource(layerId);
+                    }
+                });
+
+                // Create GeoJSON for clusters
+                const clusterData = {
+                    type: 'FeatureCollection',
+                    features: features.map(f => ({
+                        type: 'Feature',
+                        geometry: {
+                            type: 'Point',
+                            coordinates: [f.center_lon, f.center_lat]
+                        },
+                        properties: {
+                            business_count: f.business_count,
+                            business_types: f.business_types,
+                            primary_naics: f.primary_naics,
+                            dominant_naics: f.dominant_naics,
+                            spatial_variance: f.spatial_variance
+                        }
+                    }))
+                };
+
+                map.addSource('clusters', {
+                    type: 'geojson',
+                    data: clusterData
+                });
+
+                map.addLayer({
+                    id: 'clusters',
+                    type: 'circle',
+                    source: 'clusters',
+                    paint: {
+                        'circle-radius': [
+                            'interpolate',
+                            ['linear'],
+                            ['get', 'business_count'],
+                            0, 6,
+                            10, 12,
+                            50, 18
+                        ],
+                        'circle-color': [
+                            'interpolate',
+                            ['linear'],
+                            ['get', 'business_types'],
+                            1, '#FFEDA0',
+                            3, '#FEB24C',
+                            5, '#FC4E2A',
+                            8, '#E31A1C',
+                            12, '#800026'
+                        ],
+                        'circle-opacity': 0.7,
+                        'circle-stroke-color': '#333',
+                        'circle-stroke-width': 1
                     }
                 });
             }
