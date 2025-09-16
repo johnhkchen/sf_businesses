@@ -1,0 +1,73 @@
+{
+  "timestamp": "2025-09-16T12:06:53.426878",
+  "data_freshness": {
+    "business_data": {
+      "last_updated": "2025-09-16T12:06:46.019662",
+      "age_hours": 0.0020575680555555555,
+      "is_fresh": true,
+      "threshold_hours": 168.0,
+      "file_size_mb": 15.754252433776855
+    },
+    "building_data": {
+      "last_updated": "2025-09-16T11:40:46.780426",
+      "age_hours": 0.43517957805555557,
+      "is_fresh": true,
+      "threshold_hours": 720.0,
+      "file_size_mb": 13.499214172363281
+    },
+    "spatial_joins": {
+      "last_updated": null,
+      "age_hours": null,
+      "is_fresh": false,
+      "file_exists": false
+    }
+  },
+  "processing_stats": {
+    "business_data": {
+      "total_records": 275964,
+      "unique_naics_codes": 717,
+      "unique_neighborhoods": 42,
+      "date_range": {
+        "earliest": "1849-05-08 00:00:00",
+        "latest": "2025-09-15 00:00:00"
+      },
+      "geographic_coverage": {
+        "lat_range": [
+          37.700013,
+          37.899965019
+        ],
+        "lon_range": [
+          -122.58238502,
+          -122.300010017
+        ]
+      }
+    },
+    "building_data": {
+      "total_buildings": 163033,
+      "building_types": 82,
+      "avg_building_area": null
+    }
+  },
+  "quality_trends": {
+    "status": "insufficient_history",
+    "files_found": 0
+  },
+  "system_health": {
+    "disk_usage": {
+      "output_dir_size_mb": 71.81400775909424,
+      "status": "healthy"
+    },
+    "file_integrity": {
+      "required_files": [
+        "businesses.parquet",
+        "buildings.parquet"
+      ],
+      "missing_files": [],
+      "status": "healthy"
+    },
+    "error_status": {
+      "status": "healthy",
+      "last_error": null
+    }
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "timestamp": "2025-09-16 12:18:16",
+  "baseline_time": 2.193,
+  "benchmarks": [
+    {
+      "execution_time": 2.5060925483703613,
+      "config": "Optimized Pipeline (Fresh Run)",
+      "results": {
+        "total_businesses": 275964,
+        "unique_naics_codes": 717,
+        "unique_neighborhoods": 42,
+        "unique_districts": 12,
+        "earliest_start_date": "1849-05-08 00:00:00",
+        "latest_start_date": "2025-09-15 00:00:00"
+      },
+      "stdout_snippet": "\n=== PIPELINE RESULTS ===\ntotal_businesses: 275964\nunique_naics_codes: 717\nunique_neighborhoods: 42\nunique_districts: 12\nearliest_start_date: 1849-05-08 00:00:00\nlatest_start_date: 2025-09-15 00:00:00\n"
+    },
+    {
+      "execution_time": 1.5825169086456299,
+      "config": "Optimized Pipeline (Cached Run)",
+      "results": {
+        "total_businesses": 275964,
+        "unique_naics_codes": 717,
+        "unique_neighborhoods": 42,
+        "unique_districts": 12,
+        "earliest_start_date": "1849-05-08 00:00:00",
+        "latest_start_date": "2025-09-15 00:00:00"
+      },
+      "stdout_snippet": "\n=== PIPELINE RESULTS ===\ntotal_businesses: 275964\nunique_naics_codes: 717\nunique_neighborhoods: 42\nunique_districts: 12\nearliest_start_date: 1849-05-08 00:00:00\nlatest_start_date: 2025-09-15 00:00:00\n"
+    },
+    {
+      "execution_time": 1.5785558223724365,
+      "config": "Optimized Pipeline (2nd Cached Run)",
+      "results": {
+        "total_businesses": 275964,
+        "unique_naics_codes": 717,
+        "unique_neighborhoods": 42,
+        "unique_districts": 12,
+        "earliest_start_date": "1849-05-08 00:00:00",
+        "latest_start_date": "2025-09-15 00:00:00"
+      },
+      "stdout_snippet": "\n=== PIPELINE RESULTS ===\ntotal_businesses: 275964\nunique_naics_codes: 717\nunique_neighborhoods: 42\nunique_districts: 12\nearliest_start_date: 1849-05-08 00:00:00\nlatest_start_date: 2025-09-15 00:00:00\n"
+    }
+  ]
+}

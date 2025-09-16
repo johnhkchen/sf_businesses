@@ -1,5 +1,5 @@
 {
-  "timestamp": "2025-09-16T12:02:29.083614",
+  "timestamp": "2025-09-16T12:18:16.026194",
   "business_validation": {
     "completeness": {
       "field_completeness": {
@@ -88,8 +88,8 @@
         -122.3467335
       ],
       "coordinate_center": [
-        37.77035597632938,
-        -122.4261221267431
+        37.770355976329405,
+        -122.42612212674307
       ],
       "passes_outlier_check": false
     },
