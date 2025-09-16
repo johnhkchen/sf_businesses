@@ -1,0 +1,221 @@
+name: SF Business Data Refresh
+
+on:
+  # Scheduled runs
+  schedule:
+    # Daily at 6 AM UTC (10 PM PST / 11 PM PDT)
+    - cron: '0 6 * * *'
+    # Weekly building data refresh on Sundays at 7 AM UTC
+    - cron: '0 7 * * 0'
+
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      refresh_type:
+        description: 'Type of refresh to run'
+        required: true
+        default: 'business'
+        type: choice
+        options:
+        - business
+        - buildings
+        - full
+        - status
+      force_refresh:
+        description: 'Force refresh even if data is fresh'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  PYTHON_VERSION: '3.13'
+
+jobs:
+  data-refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+
+    - name: Set up project
+      run: uv sync
+
+    - name: Create cache and output directories
+      run: |
+        mkdir -p cache
+        mkdir -p output
+
+    - name: Determine refresh type
+      id: refresh_type
+      run: |
+        if [ "${{ github.event_name }}" = "schedule" ]; then
+          if [ "${{ github.event.schedule }}" = "0 6 * * *" ]; then
+            echo "type=business" >> $GITHUB_OUTPUT
+            echo "force=false" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event.schedule }}" = "0 7 * * 0" ]; then
+            echo "type=full" >> $GITHUB_OUTPUT
+            echo "force=true" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "type=${{ github.event.inputs.refresh_type }}" >> $GITHUB_OUTPUT
+          echo "force=${{ github.event.inputs.force_refresh }}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Cache data and dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          cache/
+          ~/.cache/uv
+        key: sf-business-data-${{ runner.os }}-${{ hashFiles('**/pyproject.toml') }}-${{ github.run_id }}
+        restore-keys: |
+          sf-business-data-${{ runner.os }}-${{ hashFiles('**/pyproject.toml') }}-
+          sf-business-data-${{ runner.os }}-
+
+    - name: Check refresh status
+      id: status_check
+      run: |
+        echo "=== Current Refresh Status ==="
+        uv run python refresh.py status
+
+    - name: Run data refresh
+      id: refresh
+      run: |
+        REFRESH_TYPE="${{ steps.refresh_type.outputs.type }}"
+        FORCE_FLAG=""
+
+        if [ "${{ steps.refresh_type.outputs.force }}" = "true" ]; then
+          FORCE_FLAG="--force"
+        fi
+
+        echo "=== Running $REFRESH_TYPE refresh $FORCE_FLAG ==="
+        uv run python refresh.py $REFRESH_TYPE $FORCE_FLAG
+
+    - name: Upload refresh logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: refresh-logs-${{ github.run_id }}
+        path: |
+          cache/refresh_logs/
+          output/validation_report.json
+          output/business_quality_metrics.json
+        retention-days: 30
+
+    - name: Upload output data
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: processed-data-${{ github.run_id }}
+        path: |
+          output/*.parquet
+          output/monitoring_dashboard.html
+        retention-days: 7
+
+    - name: Check for quality alerts
+      id: quality_check
+      if: success()
+      run: |
+        # Check if quality metrics indicate issues
+        if [ -f "output/business_quality_metrics.json" ]; then
+          QUALITY_SCORE=$(python -c "
+import json
+with open('output/business_quality_metrics.json', 'r') as f:
+    data = json.load(f)
+    print(data.get('overall_score', 0))
+")
+          echo "Quality score: $QUALITY_SCORE"
+
+          # Alert if quality score is below 50%
+          if (( $(echo "$QUALITY_SCORE < 0.5" | bc -l) )); then
+            echo "alert=true" >> $GITHUB_OUTPUT
+            echo "score=$QUALITY_SCORE" >> $GITHUB_OUTPUT
+          fi
+        fi
+
+    - name: Post refresh status
+      if: always()
+      run: |
+        echo "=== Final Refresh Status ==="
+        uv run python refresh.py status
+
+    - name: Create issue for quality alerts
+      if: steps.quality_check.outputs.alert == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const title = 'Data Quality Alert: Low Quality Score Detected';
+          const body = `## Data Quality Alert
+
+          **Quality Score**: ${{ steps.quality_check.outputs.score }}
+
+          The automated data refresh detected a low quality score (< 50%). This may indicate:
+
+          - Data source issues
+          - Pipeline processing problems
+          - Validation rule failures
+
+          **Workflow Run**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Please investigate the quality metrics and validation reports in the workflow artifacts.
+          `;
+
+          await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: title,
+            body: body,
+            labels: ['data-quality', 'automated-alert']
+          });
+
+  # Failure notification job
+  notify-failure:
+    runs-on: ubuntu-latest
+    needs: data-refresh
+    if: failure()
+
+    steps:
+    - name: Create issue for pipeline failure
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const title = 'Data Refresh Pipeline Failure';
+          const body = `## Pipeline Failure Alert
+
+          **Workflow**: ${{ github.workflow }}
+          **Run ID**: ${{ github.run_id }}
+          **Trigger**: ${{ github.event_name }}
+          **Time**: ${{ github.event.head_commit.timestamp || github.event.schedule }}
+
+          The automated data refresh pipeline has failed. Please check the workflow logs for details.
+
+          **Workflow Run**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          ### Possible Causes:
+          - API endpoint unavailability
+          - Network connectivity issues
+          - Data format changes
+          - Resource constraints
+
+          Please investigate and resolve the issue to ensure data freshness.
+          `;
+
+          await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: title,
+            body: body,
+            labels: ['pipeline-failure', 'automated-alert', 'urgent']
+          });

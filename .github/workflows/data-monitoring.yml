@@ -1,0 +1,294 @@
+name: Data Monitoring and Health Check
+
+on:
+  # Monitor data health every 6 hours
+  schedule:
+    - cron: '0 */6 * * *'
+
+  # Manual trigger
+  workflow_dispatch:
+
+  # Run after data refresh
+  workflow_run:
+    workflows: ["SF Business Data Refresh"]
+    types:
+      - completed
+
+env:
+  PYTHON_VERSION: '3.13'
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install uv
+      uses: actions/setup-uv@v4
+      with:
+        version: "latest"
+
+    - name: Set up project
+      run: uv sync
+
+    - name: Restore data cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          cache/
+          output/
+        key: sf-business-data-${{ runner.os }}-
+        restore-keys: |
+          sf-business-data-${{ runner.os }}-
+
+    - name: Check data freshness
+      id: freshness_check
+      run: |
+        echo "=== Data Freshness Check ==="
+        STATUS_OUTPUT=$(uv run python refresh.py status)
+        echo "$STATUS_OUTPUT"
+
+        # Extract freshness info and check age
+        CACHE_AGE=$(echo "$STATUS_OUTPUT" | python -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    cache_age = data.get('data_freshness', {}).get('cache_age_hours', 999)
+    print(cache_age)
+except:
+    print(999)
+")
+
+        echo "Cache age: $CACHE_AGE hours"
+
+        # Alert if data is older than 48 hours
+        if (( $(echo "$CACHE_AGE > 48" | bc -l) )); then
+          echo "stale_data=true" >> $GITHUB_OUTPUT
+          echo "cache_age=$CACHE_AGE" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Run monitoring dashboard
+      id: monitoring
+      run: |
+        echo "=== Running Monitoring Dashboard ==="
+        uv run python refresh.py monitoring
+
+    - name: Check for data anomalies
+      id: anomaly_check
+      run: |
+        # Check if output files exist and have reasonable sizes
+        if [ -f "output/businesses.parquet" ]; then
+          SIZE=$(stat -f%z "output/businesses.parquet" 2>/dev/null || stat -c%s "output/businesses.parquet")
+          echo "Business data size: $SIZE bytes"
+
+          # Alert if file is suspiciously small (< 1MB)
+          if [ "$SIZE" -lt 1048576 ]; then
+            echo "small_data=true" >> $GITHUB_OUTPUT
+            echo "file_size=$SIZE" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "missing_data=true" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Upload monitoring artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: monitoring-report-${{ github.run_id }}
+        path: |
+          output/monitoring_dashboard.html
+          cache/refresh_logs/
+        retention-days: 30
+
+    - name: Create issue for stale data
+      if: steps.freshness_check.outputs.stale_data == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const title = 'Data Staleness Alert: Data Not Refreshed Recently';
+          const body = `## Data Staleness Alert
+
+          **Cache Age**: ${{ steps.freshness_check.outputs.cache_age }} hours
+
+          The data has not been refreshed in over 48 hours. This may indicate:
+
+          - Scheduled refresh failures
+          - API connectivity issues
+          - Pipeline configuration problems
+
+          **Monitoring Run**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Please check the data refresh pipeline status and resolve any issues.
+          `;
+
+          await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: title,
+            body: body,
+            labels: ['data-staleness', 'monitoring-alert']
+          });
+
+    - name: Create issue for data anomalies
+      if: steps.anomaly_check.outputs.missing_data == 'true' || steps.anomaly_check.outputs.small_data == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          let title, body;
+
+          if ('${{ steps.anomaly_check.outputs.missing_data }}' === 'true') {
+            title = 'Data Anomaly Alert: Missing Output Files';
+            body = `## Missing Data Alert
+
+            The expected output files are missing from the pipeline. This indicates a critical failure in data processing.
+
+            **Expected File**: output/businesses.parquet
+
+            **Monitoring Run**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Please investigate the data pipeline immediately.
+            `;
+          } else {
+            title = 'Data Anomaly Alert: Suspiciously Small Data File';
+            body = `## Small Data File Alert
+
+            **File Size**: ${{ steps.anomaly_check.outputs.file_size }} bytes (< 1MB)
+
+            The output data file is unusually small, which may indicate:
+
+            - Data source issues
+            - Processing failures
+            - Network problems during data fetch
+
+            **Monitoring Run**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Please verify the data pipeline and source availability.
+            `;
+          }
+
+          await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: title,
+            body: body,
+            labels: ['data-anomaly', 'monitoring-alert', 'urgent']
+          });
+
+  # Performance monitoring
+  performance-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: health-check
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install uv
+      uses: actions/setup-uv@v4
+      with:
+        version: "latest"
+
+    - name: Set up project
+      run: uv sync
+
+    - name: Restore data cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          cache/
+          output/
+        key: sf-business-data-${{ runner.os }}-
+        restore-keys: |
+          sf-business-data-${{ runner.os }}-
+
+    - name: Run performance benchmark
+      id: benchmark
+      run: |
+        echo "=== Performance Benchmark ==="
+        # Run a lightweight benchmark
+        if [ -f "benchmark_performance.py" ]; then
+          uv run python benchmark_performance.py --quick
+        fi
+
+    - name: Check refresh logs for performance issues
+      id: perf_check
+      run: |
+        # Check recent refresh logs for performance issues
+        LOG_DIR="cache/refresh_logs"
+        if [ -d "$LOG_DIR" ]; then
+          # Find recent log files
+          RECENT_LOGS=$(find "$LOG_DIR" -name "*.jsonl" -mtime -1 2>/dev/null || echo "")
+
+          if [ -n "$RECENT_LOGS" ]; then
+            echo "=== Analyzing Recent Refresh Performance ==="
+
+            # Look for slow operations (>60 seconds)
+            SLOW_OPS=$(cat $RECENT_LOGS | python -c "
+import sys, json
+slow_count = 0
+for line in sys.stdin:
+    try:
+        event = json.loads(line.strip())
+        duration = event.get('details', {}).get('duration', 0)
+        if duration > 60:
+            slow_count += 1
+            print(f'Slow operation: {event.get(\"event_type\")} took {duration:.1f}s')
+    except:
+        pass
+print(f'Total slow operations: {slow_count}')
+")
+
+            echo "$SLOW_OPS"
+
+            # Check if there are more than 2 slow operations
+            SLOW_COUNT=$(echo "$SLOW_OPS" | tail -1 | grep -o '[0-9]*' || echo "0")
+            if [ "$SLOW_COUNT" -gt 2 ]; then
+              echo "performance_issues=true" >> $GITHUB_OUTPUT
+              echo "slow_operations=$SLOW_COUNT" >> $GITHUB_OUTPUT
+            fi
+          fi
+        fi
+
+    - name: Create issue for performance degradation
+      if: steps.perf_check.outputs.performance_issues == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const title = 'Performance Degradation Alert: Slow Pipeline Operations';
+          const body = `## Performance Degradation Alert
+
+          **Slow Operations Detected**: ${{ steps.perf_check.outputs.slow_operations }}
+
+          Recent pipeline operations are taking longer than expected (>60 seconds). This may indicate:
+
+          - API response time degradation
+          - Increased data volume
+          - Resource constraints
+          - Network connectivity issues
+
+          **Monitoring Run**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Consider investigating and optimizing pipeline performance.
+          `;
+
+          await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: title,
+            body: body,
+            labels: ['performance', 'monitoring-alert']
+          });
