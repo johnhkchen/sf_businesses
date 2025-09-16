@@ -8,4 +8,5 @@ dependencies = [
     "polars>=1.33.1",
     "requests>=2.31",
     "connectorx>=0.3",
+    "shapely>=2.1.1",
 ]
