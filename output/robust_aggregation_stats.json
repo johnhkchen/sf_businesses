@@ -1,0 +1,66 @@
+{
+  "pipeline_success": true,
+  "total_time_seconds": 11.64,
+  "performance_rating": "excellent",
+  "phase_times": {
+    "data_loading": 0.23,
+    "centroid_extraction": 0.07,
+    "spatial_join": 0.13,
+    "building_aggregation": 10.71,
+    "grid_aggregation": 0.5
+  },
+  "data_quality": {
+    "buildings_loaded": 163033,
+    "businesses_loaded": 275964,
+    "buildings_with_centroids": 163033,
+    "centroid_success_rate": 100.0,
+    "spatial_associations": 3213961,
+    "buildings_with_businesses": 158915,
+    "coverage_rate": 97.47
+  },
+  "business_metrics": {
+    "avg_businesses_per_building": 20.22,
+    "max_businesses_per_building": 1770,
+    "total_unique_business_types": 691,
+    "mixed_use_buildings": 132251
+  },
+  "spatial_quality": {
+    "proximity_radius_degrees": 0.0005,
+    "proximity_radius_meters": 55.5,
+    "avg_association_distance_meters": 35.5,
+    "max_association_distance_meters": 55.5
+  },
+  "output_files": {
+    "buildings_parquet": "buildings_businesses_robust.parquet",
+    "grid_parquet": "business_grid_robust.parquet",
+    "buildings_geojson": "buildings_businesses_robust.geojson",
+    "stats_json": "robust_aggregation_stats.json"
+  },
+  "grid_summary": {
+    "total_grid_cells": 2634,
+    "grid_size_degrees": 0.002,
+    "grid_size_meters": 222.0
+  },
+  "density_distribution": [
+    {
+      "density_category": "high",
+      "len": 46578
+    },
+    {
+      "density_category": "medium",
+      "len": 41185
+    },
+    {
+      "density_category": "minimal",
+      "len": 4482
+    },
+    {
+      "density_category": "very_high",
+      "len": 45159
+    },
+    {
+      "density_category": "low",
+      "len": 21511
+    }
+  ]
+}

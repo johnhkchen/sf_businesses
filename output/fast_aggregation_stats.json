@@ -1,0 +1,29 @@
+{
+  "total_time_seconds": 57.05,
+  "spatial_join_time_seconds": 34.8,
+  "buildings_processed": 163033,
+  "businesses_processed": 275964,
+  "total_associations": 3213961,
+  "buildings_with_businesses": 158915,
+  "grid_cells": 2634,
+  "avg_businesses_per_building": 20.224402982726616,
+  "max_businesses_per_building": 1770,
+  "density_distribution": [
+    {
+      "density_category": "low",
+      "count": 4482
+    },
+    {
+      "density_category": "very_high",
+      "count": 91737
+    },
+    {
+      "density_category": "high",
+      "count": 41185
+    },
+    {
+      "density_category": "medium",
+      "count": 21511
+    }
+  ]
+}
