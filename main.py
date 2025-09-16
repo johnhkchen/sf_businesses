@@ -5,6 +5,7 @@ import time
 from data_pipeline import SFBusinessPipeline
 from osm_buildings import OSMBuildingExtractor
 from spatial_join import SpatialJoiner
+from monitoring import DataMonitoringDashboard
 import logging
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -46,6 +47,15 @@ def run_full_pipeline():
         businesses_df, buildings_df = spatial_joiner.load_data()
         joined_df = spatial_joiner.perform_spatial_join(businesses_df, buildings_df)
         spatial_joiner.save_spatial_join_results(joined_df)
+
+        # Stage 4: Monitoring and Alerts
+        logger.info("=== Stage 4: Monitoring and Quality Dashboard ===")
+        monitor = DataMonitoringDashboard()
+        monitoring_result = monitor.run_monitoring_cycle()
+
+        logger.info(f"Monitoring complete - Dashboard: {monitoring_result['dashboard_path']}")
+        if monitoring_result['alerts']:
+            logger.warning(f"Generated {len(monitoring_result['alerts'])} quality alerts")
 
         # Final Results
         end_time = time.time()

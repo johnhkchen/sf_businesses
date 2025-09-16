@@ -5,6 +5,8 @@ import re
 from pathlib import Path
 import logging
 import math
+from validation import DataValidator
+from quality_metrics import QualityMetrics
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -12,9 +14,14 @@ logger = logging.getLogger(__name__)
 class SFBusinessPipeline:
     """Data ingestion pipeline for SF business data using Polars native operations."""
 
-    def __init__(self, output_dir: str = "output"):
+    def __init__(self, output_dir: str = "output", enable_validation: bool = True):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
+        self.enable_validation = enable_validation
+
+        if self.enable_validation:
+            self.validator = DataValidator(output_dir)
+            self.quality_metrics = QualityMetrics(output_dir)
 
     def setup_database(self):
         """Setup output directory for data files."""
@@ -101,6 +108,17 @@ class SFBusinessPipeline:
         output_path = self.output_dir / "businesses.parquet"
         df_final.write_parquet(output_path)
         logger.info(f"Businesses data saved to {output_path}")
+
+        # Run validation and quality checks
+        if self.enable_validation:
+            logger.info("Running data validation and quality checks...")
+            validation_report = self.validator.run_comprehensive_validation(business_df=df_final)
+            quality_score = self.quality_metrics.calculate_overall_quality_score(df_final)
+
+            # Save quality metrics
+            self.quality_metrics.save_quality_metrics(quality_score, "business_quality_metrics.json")
+
+            logger.info(f"Validation complete - Overall quality score: {quality_score['overall_score']:.2%}")
 
         # Create additional files partitioned by key dimensions for faster queries
 

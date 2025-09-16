@@ -1,0 +1,107 @@
+{
+  "timestamp": "2025-09-16T12:02:29.083614",
+  "business_validation": {
+    "completeness": {
+      "field_completeness": {
+        "unique_id": {
+          "non_null_count": 275964,
+          "total_count": 275964,
+          "completeness_rate": 1.0,
+          "passes_threshold": true
+        },
+        "ownership_name": {
+          "non_null_count": 275964,
+          "total_count": 275964,
+          "completeness_rate": 1.0,
+          "passes_threshold": true
+        },
+        "dba_name": {
+          "non_null_count": 275964,
+          "total_count": 275964,
+          "completeness_rate": 1.0,
+          "passes_threshold": true
+        },
+        "street_address": {
+          "non_null_count": 275964,
+          "total_count": 275964,
+          "completeness_rate": 1.0,
+          "passes_threshold": true
+        },
+        "longitude": {
+          "non_null_count": 275964,
+          "total_count": 275964,
+          "completeness_rate": 1.0,
+          "passes_threshold": true
+        },
+        "latitude": {
+          "non_null_count": 275964,
+          "total_count": 275964,
+          "completeness_rate": 1.0,
+          "passes_threshold": true
+        },
+        "naics_code": {
+          "non_null_count": 147255,
+          "total_count": 275964,
+          "completeness_rate": 0.5336022089837805,
+          "passes_threshold": false
+        }
+      },
+      "overall_completeness": 0.9333717441405401
+    },
+    "coordinates": {
+      "total_records": 275964,
+      "coordinates_in_sf": 272226,
+      "sf_coverage_rate": 0.9864547549680394,
+      "latitude_completeness": 1.0,
+      "longitude_completeness": 1.0,
+      "passes_geographic_validation": true
+    },
+    "naics": {
+      "total_records": 275964,
+      "naics_coverage_rate": 0.5336022089837805,
+      "unique_naics_count": 717,
+      "valid_format_rate": 0.0,
+      "passes_naics_validation": false
+    },
+    "duplicates": {
+      "account_duplicates": {
+        "total_records": 275964,
+        "unique_accounts": 189980,
+        "duplicate_rate": 0.3115768723456682
+      },
+      "name_address_duplicates": {
+        "total_records": 275964,
+        "unique_combinations": 265092,
+        "duplicate_rate": 0.039396443014306226
+      }
+    },
+    "outliers": {
+      "total_records": 275964,
+      "outlier_count": 7291,
+      "outlier_rate": 0.026420112768332102,
+      "latitude_bounds": [
+        37.703029500000014,
+        37.84065749999999
+      ],
+      "longitude_bounds": [
+        -122.49778949999998,
+        -122.3467335
+      ],
+      "coordinate_center": [
+        37.77035597632938,
+        -122.4261221267431
+      ],
+      "passes_outlier_check": false
+    },
+    "addresses": {
+      "total_records": 275964,
+      "address_completeness": 1.0,
+      "valid_format_rate": 0.997804061399313,
+      "street_type_coverage": 0.9825629429925642,
+      "passes_format_validation": true
+    }
+  },
+  "building_validation": {},
+  "overall_score": 0.790685741618472,
+  "total_checks": 5
+}
