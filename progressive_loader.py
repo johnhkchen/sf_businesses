@@ -413,6 +413,115 @@ class ProgressiveDataLoader:
         logger.info(f"Precomputation complete. Summary saved to {summary_file}")
         return results
 
+    def get_webgl_optimized_data(self, zoom_level: int, bbox: Optional[Tuple[float, float, float, float]] = None, max_points: int = 100000) -> Dict[str, Any]:
+        """
+        Get WebGL-optimized bulk data for high-performance rendering.
+
+        This method prioritizes raw performance and data volume over traditional aggregation,
+        designed to feed deck.gl with 100k+ points for 60fps rendering.
+
+        Args:
+            zoom_level: Map zoom level
+            bbox: Optional bounding box filter
+            max_points: Maximum number of points to return
+
+        Returns:
+            Dict with WebGL-optimized point data
+        """
+        start_time = time.time()
+
+        try:
+            # For WebGL rendering, we want raw business points with minimal aggregation
+            # Use the businesses dataset directly for maximum detail
+            businesses = self.businesses_df
+
+            # Apply bounding box filter if provided
+            if bbox:
+                min_lon, min_lat, max_lon, max_lat = bbox
+                businesses = businesses.filter(
+                    (pl.col("longitude") >= min_lon) &
+                    (pl.col("longitude") <= max_lon) &
+                    (pl.col("latitude") >= min_lat) &
+                    (pl.col("latitude") <= max_lat)
+                )
+
+            # Sample if we have too many points (for performance)
+            total_businesses = len(businesses)
+            if total_businesses > max_points:
+                # Use systematic sampling to maintain spatial distribution
+                sample_rate = max_points / total_businesses
+                businesses = businesses.sample(fraction=sample_rate, seed=42)
+
+            # Transform to WebGL-optimized format using efficient operations
+            webgl_data = businesses.select([
+                pl.col("longitude").alias("lon"),
+                pl.col("latitude").alias("lat"),
+                pl.col("naics_code").hash() % 10,  # Hash to color category (0-9)
+                # Convert datetime to year and use as age proxy
+                pl.when(pl.col("business_start_date").is_not_null())
+                .then(2024 - pl.col("business_start_date").dt.year())
+                .otherwise(5).alias("age_proxy"),  # Business age proxy
+                pl.lit(1).alias("size")  # Base size, can be modified in frontend
+            ]).with_columns([
+                # Create packed color values for efficiency
+                pl.when(pl.col("naics_code") == 0).then(pl.lit([255, 237, 160, 200]))  # Food/restaurant
+                .when(pl.col("naics_code") == 1).then(pl.lit([254, 178, 76, 200]))    # Retail
+                .when(pl.col("naics_code") == 2).then(pl.lit([252, 78, 42, 200]))     # Professional
+                .when(pl.col("naics_code") == 3).then(pl.lit([227, 26, 28, 200]))     # Healthcare
+                .when(pl.col("naics_code") == 4).then(pl.lit([177, 0, 38, 200]))      # Finance
+                .when(pl.col("naics_code") == 5).then(pl.lit([128, 0, 38, 200]))      # Real Estate
+                .when(pl.col("naics_code") == 6).then(pl.lit([102, 166, 30, 200]))    # Education
+                .when(pl.col("naics_code") == 7).then(pl.lit([35, 139, 69, 200]))     # Entertainment
+                .when(pl.col("naics_code") == 8).then(pl.lit([0, 109, 119, 200]))     # Transportation
+                .otherwise(pl.lit([65, 105, 225, 200])).alias("color"),              # Other/tech
+
+                # Size based on business age (newer = larger for visibility)
+                pl.when(pl.col("age_proxy") <= 5).then(4)  # Newer businesses
+                .when(pl.col("age_proxy") <= 10).then(3)
+                .otherwise(2).alias("point_size")
+            ])
+
+            # Convert to list format optimized for JSON transfer
+            points = []
+            for row in webgl_data.iter_rows(named=True):
+                points.append([
+                    row["lon"],           # x coordinate
+                    row["lat"],           # y coordinate
+                    row["point_size"],    # size
+                    *row["color"]         # r, g, b, a
+                ])
+
+            processing_time = time.time() - start_time
+
+            return {
+                "type": "webgl_bulk",
+                "zoom_level": zoom_level,
+                "points": points,
+                "total_points": len(points),
+                "total_available": total_businesses,
+                "bbox": bbox,
+                "data_format": "packed_array",  # [lon, lat, size, r, g, b, a] per point
+                "performance": {
+                    "processing_time_ms": round(processing_time * 1000, 2),
+                    "points_per_second": round(len(points) / max(processing_time, 0.001)),
+                    "memory_efficient": True,
+                    "webgl_ready": True
+                }
+            }
+
+        except Exception as e:
+            logger.error(f"Error in WebGL optimized data loading: {e}")
+            # Fallback to empty dataset
+            return {
+                "type": "webgl_bulk",
+                "zoom_level": zoom_level,
+                "points": [],
+                "total_points": 0,
+                "total_available": 0,
+                "bbox": bbox,
+                "error": str(e)
+            }
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

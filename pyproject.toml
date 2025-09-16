@@ -15,4 +15,5 @@ dependencies = [
     "geojson>=3.0.0",
     "rtree>=1.4.1",
     "psycopg2-binary>=2.9.10",
+    "aiohttp>=3.8.0",
 ]
