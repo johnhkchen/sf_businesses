@@ -1,9 +1,11 @@
 [project]
 name = "sf-businesses"
 version = "0.1.0"
-description = "Add your description here"
+description = "SF Business Data Ingestion Pipeline"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "polars>=1.33.1",
+    "requests>=2.31",
+    "connectorx>=0.3",
 ]

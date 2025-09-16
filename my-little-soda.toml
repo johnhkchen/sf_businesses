@@ -1,0 +1,48 @@
+[github]
+owner = "johnhkchen"
+repo = "sf_businesses"
+
+[github.rate_limit]
+requests_per_hour = 5000
+burst_capacity = 100
+
+[observability]
+tracing_enabled = true
+log_level = "info"
+metrics_enabled = true
+
+[agents]
+coordination_timeout_seconds = 300
+
+[agents.bundle_processing]
+max_queue_size = 50
+processing_timeout_seconds = 1800
+
+[agents.process_management]
+claude_code_path = "claude-code"
+timeout_minutes = 30
+cleanup_on_failure = true
+work_dir_prefix = ".my-little-soda/agents"
+enable_real_agents = false
+
+[agents.ci_mode]
+enabled = false
+artifact_handling = "standard"
+github_token_strategy = "standard"
+workflow_state_persistence = true
+ci_timeout_adjustment = 300
+enhanced_error_reporting = true
+
+[agents.work_continuity]
+enable_continuity = true
+state_file_path = ".my-little-soda/agent-state.json"
+backup_interval_minutes = 5
+max_recovery_attempts = 3
+validation_timeout_seconds = 30
+force_fresh_start_after_hours = 24
+preserve_partial_work = true
+
+[database]
+url = ".my-little-soda/my-little-soda.db"
+max_connections = 10
+auto_migrate = true
