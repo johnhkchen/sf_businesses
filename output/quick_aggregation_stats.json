@@ -1,0 +1,23 @@
+{
+  "buildings_processed": 5000,
+  "grid_cells": 3169,
+  "avg_businesses_per_grid": 87.08236036604607,
+  "density_distribution": [
+    {
+      "density_category": "very_high",
+      "count": 2139
+    },
+    {
+      "density_category": "high",
+      "count": 291
+    },
+    {
+      "density_category": "low",
+      "count": 544
+    },
+    {
+      "density_category": "medium",
+      "count": 195
+    }
+  ]
+}
